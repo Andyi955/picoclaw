@@ -2,14 +2,8 @@
 .gitignore
 build/
 .picoclaw/
-config/
 .env
 .env.example
-*.md
 LICENSE
-assets/
-docker-compose.yml
-workspace/
-picoclaw-workspace/
 config/picoclaw-workspace/
 tmp/
