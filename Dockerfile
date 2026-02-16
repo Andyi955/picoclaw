@@ -24,7 +24,7 @@ RUN make build
 FROM alpine:3.23
 
 # Install runtime essentials
-RUN apk add --no-cache ca-certificates tzdata curl nodejs npm
+RUN apk add --no-cache ca-certificates tzdata curl
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

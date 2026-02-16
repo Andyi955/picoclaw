@@ -2,8 +2,9 @@
 .gitignore
 build/
 .picoclaw/
+config/
 .env
 .env.example
+*.md
 LICENSE
-config/picoclaw-workspace/
-tmp/
+assets/

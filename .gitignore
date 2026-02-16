@@ -44,10 +44,3 @@ tasks/
 
 # Added by goreleaser init:
 dist/
-
-# Local Dev
-docker-compose.yml
-workspace/
-picoclaw-workspace/
-config/picoclaw-workspace/
-tmp/

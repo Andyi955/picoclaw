@@ -8,9 +8,11 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: picoclaw-agent
+    profiles:
+      - agent
     volumes:
       - ./config/config.json:/root/.picoclaw/config.json:ro
-      - ./workspace:/root/.picoclaw/workspace
+      - picoclaw-workspace:/root/.picoclaw/workspace
     entrypoint: ["picoclaw", "agent"]
     stdin_open: true
     tty: true
@@ -24,10 +26,15 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: picoclaw-gateway
+    restart: unless-stopped
+    profiles:
+      - gateway
     volumes:
       # Configuration file
       - ./config/config.json:/root/.picoclaw/config.json:ro
       # Persistent workspace (sessions, memory, logs)
-      - ./workspace:/root/.picoclaw/workspace
+      - picoclaw-workspace:/root/.picoclaw/workspace
     command: ["gateway"]
 
+volumes:
+  picoclaw-workspace:
