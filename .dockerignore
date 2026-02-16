@@ -8,3 +8,8 @@ config/
 *.md
 LICENSE
 assets/
+docker-compose.yml
+workspace/
+picoclaw-workspace/
+config/picoclaw-workspace/
+tmp/

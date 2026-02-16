@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -25,6 +26,7 @@ type DiscordChannel struct {
 	config      config.DiscordConfig
 	transcriber *voice.GroqTranscriber
 	ctx         context.Context
+	typingTasks sync.Map
 }
 
 func NewDiscordChannel(cfg config.DiscordConfig, bus *bus.MessageBus) (*DiscordChannel, error) {
@@ -98,6 +100,18 @@ func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 	channelID := msg.ChatID
 	if channelID == "" {
 		return fmt.Errorf("channel ID is empty")
+	}
+
+	// Stop typing indicator heartbeat for this channel
+	if stop, ok := c.typingTasks.Load(channelID); ok {
+		if stopChan, ok := stop.(chan struct{}); ok {
+			select {
+			case <-stopChan:
+			default:
+				close(stopChan)
+			}
+		}
+		c.typingTasks.Delete(channelID)
 	}
 
 	runes := []rune(msg.Content)
@@ -286,11 +300,33 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		return
 	}
 
-	if err := c.session.ChannelTyping(m.ChannelID); err != nil {
-		logger.ErrorCF("discord", "Failed to send typing indicator", map[string]any{
-			"error": err.Error(),
-		})
+	// Start typing indicator heartbeat
+	stopTyping := make(chan struct{})
+	if old, ok := c.typingTasks.Load(m.ChannelID); ok {
+		if oldChan, ok := old.(chan struct{}); ok {
+			select {
+			case <-oldChan:
+			default:
+				close(oldChan)
+			}
+		}
 	}
+	c.typingTasks.Store(m.ChannelID, stopTyping)
+
+	go func(chID string, stop chan struct{}) {
+		// Send initial typing
+		_ = c.session.ChannelTyping(chID)
+		ticker := time.NewTicker(7 * time.Second) // Discord typing lasts ~10s
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				_ = c.session.ChannelTyping(chID)
+			}
+		}
+	}(m.ChannelID, stopTyping)
 
 	// 检查白名单，避免为被拒绝的用户下载附件和转录
 	if !c.IsAllowed(m.Author.ID) {
