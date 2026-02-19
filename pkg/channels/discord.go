@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -26,6 +26,7 @@ type DiscordChannel struct {
 	config      config.DiscordConfig
 	transcriber *voice.GroqTranscriber
 	ctx         context.Context
+	typingTasks sync.Map
 }
 
 func NewDiscordChannel(cfg config.DiscordConfig, bus *bus.MessageBus) (*DiscordChannel, error) {
@@ -84,6 +85,15 @@ func (c *DiscordChannel) Stop(ctx context.Context) error {
 	logger.InfoC("discord", "Stopping Discord bot")
 	c.setRunning(false)
 
+	// Stop all typing goroutines before closing session
+	c.typingTasks.Range(func(key, value interface{}) bool {
+		if stop, ok := value.(chan struct{}); ok {
+			close(stop)
+		}
+		c.typingTasks.Delete(key)
+		return true
+	})
+
 	if err := c.session.Close(); err != nil {
 		return fmt.Errorf("failed to close discord session: %w", err)
 	}
@@ -92,6 +102,8 @@ func (c *DiscordChannel) Stop(ctx context.Context) error {
 }
 
 func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
+	c.stopTyping(msg.ChatID)
+
 	if !c.IsRunning() {
 		return fmt.Errorf("discord bot not running")
 	}
@@ -101,12 +113,25 @@ func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 		return fmt.Errorf("channel ID is empty")
 	}
 
+	// Stop typing indicator heartbeat for this channel
+	if stop, ok := c.typingTasks.Load(channelID); ok {
+		if stopChan, ok := stop.(chan struct{}); ok {
+			select {
+			case <-stopChan:
+			default:
+				close(stopChan)
+			}
+		}
+		c.typingTasks.Delete(channelID)
+	}
+
 	runes := []rune(msg.Content)
 	if len(runes) == 0 {
 		return nil
 	}
 
-	chunks := splitMessage(msg.Content, 1500) // Discord has a limit of 2000 characters per message, leave 500 for natural split e.g. code blocks
+	// Use local splitMessage to preserve rune system
+	chunks := splitMessage(msg.Content, 2000) 
 
 	for _, chunk := range chunks {
 		if err := c.sendChunk(ctx, channelID, chunk); err != nil {
@@ -120,97 +145,102 @@ func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 // splitMessage splits long messages into chunks, preserving code block integrity
 // Uses natural boundaries (newlines, spaces) and extends messages slightly to avoid breaking code blocks
 func splitMessage(content string, limit int) []string {
-	var messages []string
+	if limit > 1900 {
+		limit = 1900
+	}
+	runes := []rune(content)
+	if len(runes) <= limit {
+		return []string{content}
+	}
 
-	for len(content) > 0 {
-		if len(content) <= limit {
-			messages = append(messages, content)
+	var chunks []string
+	for len(runes) > 0 {
+		if len(runes) <= limit {
+			chunks = append(chunks, string(runes))
 			break
 		}
 
-		msgEnd := limit
+		splitAt := limit
 
-		// Find natural split point within the limit
-		msgEnd = findLastNewline(content[:limit], 200)
-		if msgEnd <= 0 {
-			msgEnd = findLastSpace(content[:limit], 100)
-		}
-		if msgEnd <= 0 {
-			msgEnd = limit
+		// Look for natural split points (newlines) in a window
+		window := 300
+		if splitAt < window {
+			window = splitAt
 		}
 
-		// Check if this would end with an incomplete code block
-		candidate := content[:msgEnd]
-		unclosedIdx := findLastUnclosedCodeBlock(candidate)
+		foundNatural := false
+		for i := splitAt - 1; i >= splitAt-window; i-- {
+			if runes[i] == '\n' {
+				splitAt = i + 1
+				foundNatural = true
+				break
+			}
+		}
 
-		if unclosedIdx >= 0 {
-			// Message would end with incomplete code block
-			// Try to extend to include the closing ``` (with some buffer)
-			extendedLimit := limit + 500 // Allow 500 char buffer for code blocks
-			if len(content) > extendedLimit {
-				closingIdx := findNextClosingCodeBlock(content, msgEnd)
-				if closingIdx > 0 && closingIdx <= extendedLimit {
-					// Extend to include the closing ```
-					msgEnd = closingIdx
-				} else {
-					// Can't find closing, split before the code block
-					msgEnd = findLastNewline(content[:unclosedIdx], 200)
-					if msgEnd <= 0 {
-						msgEnd = findLastSpace(content[:unclosedIdx], 100)
-					}
-					if msgEnd <= 0 {
-						msgEnd = unclosedIdx
+		if !foundNatural {
+			for i := splitAt - 1; i >= splitAt-window/2; i-- {
+				if runes[i] == ' ' || runes[i] == '\t' {
+					splitAt = i + 1
+					foundNatural = true
+					break
+				}
+			}
+		}
+
+		// Check for unclosed code blocks
+		chunkCandidate := runes[:splitAt]
+		if isInsideCodeBlock(chunkCandidate) {
+			// Try to find the closing code block within extended limit
+			extendedLimit := limit + 300
+			if extendedLimit > 2000 {
+				extendedLimit = 2000
+			}
+
+			foundClosing := false
+			for i := splitAt; i < len(runes)-2 && i < extendedLimit-3; i++ {
+				if runes[i] == '`' && runes[i+1] == '`' && runes[i+2] == '`' {
+					splitAt = i + 3
+					foundClosing = true
+					break
+				}
+			}
+
+			if !foundClosing {
+				// Can't find closing within reasonable limit, split before the block
+				for i := splitAt - 1; i >= 0; i-- {
+					if i+2 < len(runes) && runes[i] == '`' && runes[i+1] == '`' && runes[i+2] == '`' {
+						if i > 0 {
+							splitAt = i
+						}
+						break
 					}
 				}
-			} else {
-				// Remaining content fits within extended limit
-				msgEnd = len(content)
 			}
 		}
 
-		if msgEnd <= 0 {
-			msgEnd = limit
+		if splitAt <= 0 {
+			splitAt = limit
 		}
 
-		messages = append(messages, content[:msgEnd])
-		content = strings.TrimSpace(content[msgEnd:])
+		chunks = append(chunks, string(runes[:splitAt]))
+		runes = runes[splitAt:]
 	}
 
-	return messages
+	return chunks
 }
 
-// findLastUnclosedCodeBlock finds the last opening ``` that doesn't have a closing ```
-// Returns the position of the opening ``` or -1 if all code blocks are complete
-func findLastUnclosedCodeBlock(text string) int {
+func isInsideCodeBlock(runes []rune) bool {
 	count := 0
-	lastOpenIdx := -1
-
-	for i := 0; i < len(text); i++ {
-		if i+2 < len(text) && text[i] == '`' && text[i+1] == '`' && text[i+2] == '`' {
-			if count == 0 {
-				lastOpenIdx = i
-			}
+	for i := 0; i < len(runes)-2; i++ {
+		if runes[i] == '`' && runes[i+1] == '`' && runes[i+2] == '`' {
 			count++
 			i += 2
 		}
 	}
-
-	// If odd number of ``` markers, last one is unclosed
-	if count%2 == 1 {
-		return lastOpenIdx
-	}
-	return -1
+	return count%2 != 0
 }
 
-// findNextClosingCodeBlock finds the next closing ``` starting from a position
-// Returns the position after the closing ``` or -1 if not found
-func findNextClosingCodeBlock(text string, startIdx int) int {
-	for i := startIdx; i < len(text); i++ {
-		if i+2 < len(text) && text[i] == '`' && text[i+1] == '`' && text[i+2] == '`' {
-			return i + 3
-		}
-	}
-	return -1
+func _unused_marker_() {
 }
 
 // findLastNewline finds the last newline character within the last N characters
@@ -282,12 +312,6 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		return
 	}
 
-	if err := c.session.ChannelTyping(m.ChannelID); err != nil {
-		logger.ErrorCF("discord", "Failed to send typing indicator", map[string]any{
-			"error": err.Error(),
-		})
-	}
-
 	// 检查白名单，避免为被拒绝的用户下载附件和转录
 	if !c.IsAllowed(m.Author.ID) {
 		logger.DebugCF("discord", "Message rejected by allowlist", map[string]any{
@@ -295,6 +319,34 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		})
 		return
 	}
+
+	// Start typing indicator heartbeat
+	stopTyping := make(chan struct{})
+	if old, ok := c.typingTasks.Load(m.ChannelID); ok {
+		if oldChan, ok := old.(chan struct{}); ok {
+			select {
+			case <-oldChan:
+			default:
+				close(oldChan)
+			}
+		}
+	}
+	c.typingTasks.Store(m.ChannelID, stopTyping)
+
+	go func(chID string, stop chan struct{}) {
+		// Send initial typing
+		_ = c.session.ChannelTyping(chID)
+		ticker := time.NewTicker(7 * time.Second) // Discord typing lasts ~10s
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				_ = c.session.ChannelTyping(chID)
+			}
+		}
+	}(m.ChannelID, stopTyping)
 
 	senderID := m.Author.ID
 	senderName := m.Author.Username
@@ -376,6 +428,13 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		"preview":     utils.Truncate(content, 50),
 	})
 
+	peerKind := "channel"
+	peerID := m.ChannelID
+	if m.GuildID == "" {
+		peerKind = "direct"
+		peerID = senderID
+	}
+
 	metadata := map[string]string{
 		"message_id":   m.ID,
 		"user_id":      senderID,
@@ -384,9 +443,22 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		"guild_id":     m.GuildID,
 		"channel_id":   m.ChannelID,
 		"is_dm":        fmt.Sprintf("%t", m.GuildID == ""),
+		"peer_kind":    peerKind,
+		"peer_id":      peerID,
 	}
 
 	c.HandleMessage(senderID, m.ChannelID, content, mediaPaths, metadata)
+}
+
+// stopTyping stops the typing indicator loop for the given chatID.
+// This is a helper that wraps sync.Map logic
+func (c *DiscordChannel) stopTyping(chatID string) {
+	if stop, ok := c.typingTasks.Load(chatID); ok {
+		if stopChan, ok := stop.(chan struct{}); ok {
+			close(stopChan)
+		}
+		c.typingTasks.Delete(chatID)
+	}
 }
 
 func (c *DiscordChannel) downloadAttachment(url, filename string) string {
