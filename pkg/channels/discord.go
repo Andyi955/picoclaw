@@ -85,6 +85,15 @@ func (c *DiscordChannel) Stop(ctx context.Context) error {
 	logger.InfoC("discord", "Stopping Discord bot")
 	c.setRunning(false)
 
+	// Stop all typing goroutines before closing session
+	c.typingTasks.Range(func(key, value interface{}) bool {
+		if stop, ok := value.(chan struct{}); ok {
+			close(stop)
+		}
+		c.typingTasks.Delete(key)
+		return true
+	})
+
 	if err := c.session.Close(); err != nil {
 		return fmt.Errorf("failed to close discord session: %w", err)
 	}
@@ -93,6 +102,8 @@ func (c *DiscordChannel) Stop(ctx context.Context) error {
 }
 
 func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
+	c.stopTyping(msg.ChatID)
+
 	if !c.IsRunning() {
 		return fmt.Errorf("discord bot not running")
 	}
@@ -119,7 +130,8 @@ func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 		return nil
 	}
 
-	chunks := splitMessage(msg.Content, 1500) // Discord has a limit of 2000 characters per message, leave 500 for natural split e.g. code blocks
+	// Use local splitMessage to preserve rune system
+	chunks := splitMessage(msg.Content, 2000) 
 
 	for _, chunk := range chunks {
 		if err := c.sendChunk(ctx, channelID, chunk); err != nil {
@@ -300,6 +312,14 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		return
 	}
 
+	// 检查白名单，避免为被拒绝的用户下载附件和转录
+	if !c.IsAllowed(m.Author.ID) {
+		logger.DebugCF("discord", "Message rejected by allowlist", map[string]any{
+			"user_id": m.Author.ID,
+		})
+		return
+	}
+
 	// Start typing indicator heartbeat
 	stopTyping := make(chan struct{})
 	if old, ok := c.typingTasks.Load(m.ChannelID); ok {
@@ -327,14 +347,6 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 			}
 		}
 	}(m.ChannelID, stopTyping)
-
-	// 检查白名单，避免为被拒绝的用户下载附件和转录
-	if !c.IsAllowed(m.Author.ID) {
-		logger.DebugCF("discord", "Message rejected by allowlist", map[string]any{
-			"user_id": m.Author.ID,
-		})
-		return
-	}
 
 	senderID := m.Author.ID
 	senderName := m.Author.Username
@@ -416,6 +428,13 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		"preview":     utils.Truncate(content, 50),
 	})
 
+	peerKind := "channel"
+	peerID := m.ChannelID
+	if m.GuildID == "" {
+		peerKind = "direct"
+		peerID = senderID
+	}
+
 	metadata := map[string]string{
 		"message_id":   m.ID,
 		"user_id":      senderID,
@@ -424,9 +443,22 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		"guild_id":     m.GuildID,
 		"channel_id":   m.ChannelID,
 		"is_dm":        fmt.Sprintf("%t", m.GuildID == ""),
+		"peer_kind":    peerKind,
+		"peer_id":      peerID,
 	}
 
 	c.HandleMessage(senderID, m.ChannelID, content, mediaPaths, metadata)
+}
+
+// stopTyping stops the typing indicator loop for the given chatID.
+// This is a helper that wraps sync.Map logic
+func (c *DiscordChannel) stopTyping(chatID string) {
+	if stop, ok := c.typingTasks.Load(chatID); ok {
+		if stopChan, ok := stop.(chan struct{}); ok {
+			close(stopChan)
+		}
+		c.typingTasks.Delete(chatID)
+	}
 }
 
 func (c *DiscordChannel) downloadAttachment(url, filename string) string {
