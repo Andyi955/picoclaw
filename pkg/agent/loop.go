@@ -595,6 +595,9 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 		}
 		for _, tc := range response.ToolCalls {
 			argumentsJSON, _ := json.Marshal(tc.Arguments)
+			// Copy ExtraContent to ensure thought_signature is persisted
+			extraContent := tc.ExtraContent
+			
 			assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, providers.ToolCall{
 				ID:   tc.ID,
 				Type: "function",
@@ -602,7 +605,9 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 					Name:      tc.Name,
 					Arguments: string(argumentsJSON),
 				},
-				Name: tc.Name,
+				ExtraContent: extraContent,
+				// We also set internal ThoughtSignature, but ExtraContent is what matters for serialization
+				ThoughtSignature: tc.ThoughtSignature, 
 			})
 		}
 		messages = append(messages, assistantMsg)

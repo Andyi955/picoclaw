@@ -44,3 +44,10 @@ tasks/
 
 # Added by goreleaser init:
 dist/
+
+# Local developments and leaks
+workspace/
+sessions/
+memory/
+logs/
+*.log
