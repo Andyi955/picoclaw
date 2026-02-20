@@ -21,7 +21,7 @@ type GoogleExtra struct {
 type FunctionCall struct {
 	Name             string `json:"name"`
 	Arguments        string `json:"arguments"`
-	ThoughtSignature string `json:"-"` // Internal use only
+	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
 type LLMResponse struct {
