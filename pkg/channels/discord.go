@@ -39,6 +39,9 @@ func NewDiscordChannel(cfg config.DiscordConfig, bus *bus.MessageBus) (*DiscordC
 		return nil, fmt.Errorf("failed to create discord session: %w", err)
 	}
 
+	// Request all intents required for supreme admin capabilities
+	session.Identify.Intents = discordgo.IntentsAll
+
 	base := NewBaseChannel("discord", cfg, bus, cfg.AllowFrom)
 
 	return &DiscordChannel{
