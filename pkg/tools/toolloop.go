@@ -108,14 +108,22 @@ func RunToolLoop(
 		}
 		for _, tc := range normalizedToolCalls {
 			argumentsJSON, _ := json.Marshal(tc.Arguments)
+			thoughtSignature := tc.ThoughtSignature
+			if thoughtSignature == "" && tc.Function != nil {
+				thoughtSignature = tc.Function.ThoughtSignature
+			}
+
 			assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, providers.ToolCall{
-				ID:        tc.ID,
-				Type:      "function",
-				Name:      tc.Name,
-				Arguments: tc.Arguments,
+				ID:               tc.ID,
+				Type:             "function",
+				Name:             tc.Name,
+				Arguments:        tc.Arguments,
+				ThoughtSignature: thoughtSignature,
+				ExtraContent:     tc.ExtraContent,
 				Function: &providers.FunctionCall{
-					Name:      tc.Name,
-					Arguments: string(argumentsJSON),
+					Name:             tc.Name,
+					Arguments:        string(argumentsJSON),
+					ThoughtSignature: thoughtSignature,
 				},
 			})
 		}

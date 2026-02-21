@@ -33,10 +33,16 @@ func NormalizeToolCall(tc ToolCall) ToolCall {
 
 	// Ensure Function is populated with consistent values
 	argsJSON, _ := json.Marshal(normalized.Arguments)
+	thoughtSignature := normalized.ThoughtSignature
+	if thoughtSignature == "" && normalized.Function != nil {
+		thoughtSignature = normalized.Function.ThoughtSignature
+	}
+
 	if normalized.Function == nil {
 		normalized.Function = &FunctionCall{
-			Name:      normalized.Name,
-			Arguments: string(argsJSON),
+			Name:             normalized.Name,
+			Arguments:        string(argsJSON),
+			ThoughtSignature: thoughtSignature,
 		}
 	} else {
 		if normalized.Function.Name == "" {
@@ -48,7 +54,12 @@ func NormalizeToolCall(tc ToolCall) ToolCall {
 		if normalized.Function.Arguments == "" {
 			normalized.Function.Arguments = string(argsJSON)
 		}
+		if normalized.Function.ThoughtSignature == "" {
+			normalized.Function.ThoughtSignature = thoughtSignature
+		}
 	}
+
+	normalized.ThoughtSignature = thoughtSignature
 
 	return normalized
 }

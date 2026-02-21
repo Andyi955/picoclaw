@@ -89,7 +89,7 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 							info.Name = metadata.Name
 						}
 						if err := info.validate(); err != nil {
-							slog.Warn("invalid skill from workspace", "name", info.Name, "error", err)
+							slog.Warn("invalid skill from workspace", "name", info.Name, "path", skillFile, "error", err)
 							continue
 						}
 						skills = append(skills, info)
@@ -129,7 +129,7 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 							info.Name = metadata.Name
 						}
 						if err := info.validate(); err != nil {
-							slog.Warn("invalid skill from global", "name", info.Name, "error", err)
+							slog.Warn("invalid skill from global", "name", info.Name, "path", skillFile, "error", err)
 							continue
 						}
 						skills = append(skills, info)
@@ -168,7 +168,7 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 							info.Name = metadata.Name
 						}
 						if err := info.validate(); err != nil {
-							slog.Warn("invalid skill from builtin", "name", info.Name, "error", err)
+							slog.Warn("invalid skill from builtin", "name", info.Name, "path", skillFile, "error", err)
 							continue
 						}
 						skills = append(skills, info)
@@ -310,7 +310,7 @@ func (sl *SkillsLoader) parseSimpleYAML(content string) map[string]string {
 			value := strings.TrimSpace(parts[1])
 			// Remove quotes if present
 			value = strings.Trim(value, "\"'")
-			result[key] = value
+			result[strings.ToLower(key)] = value
 		}
 	}
 

@@ -633,6 +633,9 @@ func (al *AgentLoop) runLLMIteration(
 			if tc.Function != nil {
 				thoughtSignature = tc.Function.ThoughtSignature
 			}
+			if thoughtSignature == "" {
+				thoughtSignature = tc.ThoughtSignature
+			}
 
 			assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, providers.ToolCall{
 				ID:   tc.ID,

@@ -333,11 +333,17 @@ func normalizeStoredToolCall(tc ToolCall) (string, map[string]any, string) {
 	args := tc.Arguments
 	thoughtSignature := ""
 
-	if name == "" && tc.Function != nil {
-		name = tc.Function.Name
+	if tc.Function != nil {
+		if name == "" {
+			name = tc.Function.Name
+		}
 		thoughtSignature = tc.Function.ThoughtSignature
-	} else if tc.Function != nil {
-		thoughtSignature = tc.Function.ThoughtSignature
+	}
+	if thoughtSignature == "" {
+		thoughtSignature = tc.ThoughtSignature
+	}
+	if thoughtSignature == "" && tc.ExtraContent != nil && tc.ExtraContent.Google != nil {
+		thoughtSignature = tc.ExtraContent.Google.ThoughtSignature
 	}
 
 	if args == nil {
