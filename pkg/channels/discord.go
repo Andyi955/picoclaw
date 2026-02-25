@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -126,7 +127,8 @@ func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 		return nil
 	}
 
-	chunks := utils.SplitMessage(msg.Content, 2000) // Split messages into chunks, Discord length limit: 2000 chars
+	formattedContent := c.formatThinkBlocks(msg.Content)
+	chunks := utils.SplitMessage(formattedContent, 2000) // Split messages into chunks, Discord length limit: 2000 chars
 
 	for _, chunk := range chunks {
 		if err := c.sendChunk(ctx, channelID, chunk); err != nil {
@@ -370,4 +372,28 @@ func (c *DiscordChannel) stripBotMention(text string) string {
 	text = strings.ReplaceAll(text, fmt.Sprintf("<@%s>", c.botUserID), "")
 	text = strings.ReplaceAll(text, fmt.Sprintf("<@!%s>", c.botUserID), "")
 	return strings.TrimSpace(text)
+}
+
+// formatThinkBlocks formats <think> tags into visually pleasing Discord Markdown.
+func (c *DiscordChannel) formatThinkBlocks(content string) string {
+	re := regexp.MustCompile(`(?s)<think>(.*?)</think>`)
+	return re.ReplaceAllStringFunc(content, func(match string) string {
+		inner := match[7 : len(match)-8]
+		inner = strings.TrimSpace(inner)
+		if inner == "" {
+			return ""
+		}
+		// Render thinking process as a markdown blockquote with italics.
+		lines := strings.Split(inner, "\n")
+		var formatted []string
+		formatted = append(formatted, "> *🤔 Thinking...*")
+		for _, line := range lines {
+			if strings.TrimSpace(line) != "" {
+				formatted = append(formatted, "> *"+strings.TrimSpace(line)+"*")
+			} else {
+				formatted = append(formatted, ">")
+			}
+		}
+		return strings.Join(formatted, "\n") + "\n"
+	})
 }
